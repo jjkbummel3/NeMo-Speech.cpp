@@ -1,0 +1,40 @@
+name: build-windows-cuda
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Ninja + CMake
+        run: choco install -y ninja cmake git
+
+      # Install CUDA toolkit (one option)
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.20
+        with:
+          cuda: "12.8.0"
+
+      - name: Configure
+        run: cmake --preset cuda-server
+
+      - name: Build
+        run: cmake --build --preset cuda-server --parallel
+
+      - name: Collect artifacts
+        run: |
+          mkdir dist
+          copy build\cuda-server\bin\nemo-speech.exe dist\
+          Compress-Archive -Path dist\* -DestinationPath nemo-speech-windows-cuda.zip
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nemo-speech-windows-cuda
+          path: nemo-speech-windows-cuda.zip
