@@ -3,38 +3,84 @@ name: build-windows-cuda
 on:
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2022
+    timeout-minutes: 360
+
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout
+        uses: actions/checkout@v4
         with:
-          submodules: recursive
+          submodules: false
+          persist-credentials: false
 
-      - uses: ilammy/msvc-dev-cmd@v1
-
-      - name: Install Ninja + CMake
-        run: choco install -y ninja cmake git
-
-      # Install CUDA toolkit (one option)
-      - name: Install CUDA Toolkit
-        uses: Jimver/cuda-toolkit@v0.2.20
-        with:
-          cuda: "12.8.0"
-
-      - name: Configure
-        run: cmake --preset cuda-server
-
-      - name: Build
-        run: cmake --build --preset cuda-server --parallel
-
-      - name: Collect artifacts
+      - name: Init submodules
+        shell: bash
         run: |
-          mkdir dist
-          copy build\cuda-server\bin\nemo-speech.exe dist\
-          Compress-Archive -Path dist\* -DestinationPath nemo-speech-windows-cuda.zip
+          git submodule update --init --depth 1 llama.cpp third_party/cpp-httplib
 
-      - uses: actions/upload-artifact@v4
+      # Same helper NVIDIA uses in release.yml
+      - name: Install build prerequisites
+        timeout-minutes: 45
+        shell: pwsh
+        run: scripts\windows\install-build-prerequisites.ps1 -Architecture x64
+
+      - name: Install CUDA Toolkit
+        uses: Jimver/cuda-toolkit@v0.2.36
         with:
-          name: nemo-speech-windows-cuda
-          path: nemo-speech-windows-cuda.zip
+          cuda: "13.0.0"
+          method: network
+
+      - name: Restore vcpkg cache
+        id: vcpkg-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: vcpkg-windows-x64-${{ hashFiles('vcpkg.json', 'scripts/windows/build.ps1') }}
+          restore-keys: vcpkg-windows-x64-
+
+      - name: Build (cuda + server = includes SPEECHLM/SALM)
+        id: build
+        shell: pwsh
+        run: |
+          $arguments = @{
+            Backend      = 'cuda'
+            Profile      = 'server'   # ASR + diar + TTS + NMT + SPEECHLM + HTTP
+            Architecture = 'x64'
+            BuildDir     = "${{ github.workspace }}\build\release-cuda"
+            # Explicit arches (runner has no GPU → never use "native")
+            # 86 = RTX 3090
+            CudaArch     = '75-real;80-virtual;86-real;89-real;120a-real'
+            CMakeArgs    = @('-DGGML_NATIVE=OFF')
+          }
+          scripts\windows\build.ps1 @arguments
+
+      - name: Save vcpkg cache
+        if: steps.build.outcome == 'success' && steps.vcpkg-cache.outputs.cache-hit != 'true'
+        continue-on-error: true   # ignore GitHub cache outages
+        uses: actions/cache/save@v4
+        with:
+          path: ~\AppData\Local\vcpkg\archives
+          key: ${{ steps.vcpkg-cache.outputs.cache-primary-key }}
+
+      # Proper zip with exe + DLLs + licenses (do NOT only copy .exe)
+      - name: Package
+        shell: pwsh
+        run: |
+          scripts\windows\package-release.ps1 `
+            -BuildDir build\release-cuda `
+            -Architecture x64 `
+            -Backend cuda `
+            -Version nightly `
+            -OutputDir release-artifacts
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: nemo-speech-windows-x86_64-cuda
+          path: release-artifacts/*
+          if-no-files-found: error
