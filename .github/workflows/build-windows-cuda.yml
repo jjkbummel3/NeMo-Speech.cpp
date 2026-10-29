@@ -5,13 +5,16 @@ on:
 
 jobs:
   build:
-    runs-on: windows-latest
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v5
         with:
           submodules: recursive
 
       - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          vsversion: "2022"
+          arch: x64
 
       - name: Install Ninja + CMake
         run: choco install -y ninja cmake
@@ -20,8 +23,6 @@ jobs:
         uses: Jimver/cuda-toolkit@v0.2.36
         with:
           cuda: "12.8.0"
-          use-github-cache: "false"
-          use-local-cache: "true"
 
       - name: Configure (preset)
         run: cmake --preset cuda-server
@@ -33,7 +34,7 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
-          Copy-Item -Force build\cuda-server\bin\nemo-speech.exe dist\
+          Copy-Item -Recurse -Force build\cuda-server\bin\* dist\
           Compress-Archive -Path dist\* -DestinationPath nemo-speech-windows-cuda.zip
 
       - uses: actions/upload-artifact@v4
